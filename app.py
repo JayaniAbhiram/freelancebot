@@ -1,25 +1,29 @@
+import os
+import time
+import threading
 import requests
 from bs4 import BeautifulSoup
+from flask import Flask
 import google.generativeai as genai
-import time
+
+# Flask App
+app = Flask(__name__)
 
 # ------------------ CONFIG ------------------
-GEMINI_API_KEY = "AIzaSyCxfprGVUVUNumMNmYokQTUTbMzOhH8f7Q"
-TELEGRAM_BOT_TOKEN = "7494080573:AAFlJhPVpNNvJrEt5ZS-t6brUAIrYnKmH_Q"
-TELEGRAM_CHAT_ID = "1507855306"    # 🔁 Replace with your Telegram Chat ID
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 SEARCH_KEYWORDS = "php developer, data analyst"
-FILTER_KEYWORDS = ["php", "backend", "wordpress, data analysis, mysql, core php"]
-CHECK_INTERVAL = 60 * 15  # every 30 minutes
+FILTER_KEYWORDS = ["php", "backend", "wordpress", "data analysis", "mysql", "core php"]
+CHECK_INTERVAL = 60 * 15  # 15 minutes
 
-# Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
-
 seen_links = set()
-# ------------------------------------------------
 
-# 🔍 Fetch jobs from Freelancer.com
+# --------------------------------------------
+
 def fetch_jobs(keyword=SEARCH_KEYWORDS):
     url = f"https://www.freelancer.com/jobs/{keyword.replace(' ', '-')}/"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -40,11 +44,9 @@ def fetch_jobs(keyword=SEARCH_KEYWORDS):
         jobs.append({"title": title, "link": link, "description": desc_text})
     return jobs
 
-# 🧠 Filter by keyword
 def filter_jobs(jobs):
     return [job for job in jobs if any(word.lower() in job["description"].lower() for word in FILTER_KEYWORDS)]
 
-# ✨ Generate a job-specific 2-paragraph proposal
 def generate_proposal(job):
     prompt = f"""
 Write a freelance job proposal based on the job below:
@@ -69,7 +71,6 @@ Abhiram Jayani
 
 Avoid generic statements. Make the proposal relevant and powerful.
 """
-
     print("🧠 Generating custom proposal...")
     try:
         response = model.generate_content(prompt)
@@ -79,7 +80,6 @@ Avoid generic statements. Make the proposal relevant and powerful.
         print(f"❌ Gemini Error: {e}")
         return f"⚠️ Failed to generate proposal: {e}"
 
-# 📩 Send message via Telegram
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
@@ -92,28 +92,43 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram Exception:", e)
 
-# 🔁 Main loop
-def main():
-    print("🔍 Checking Freelancer jobs...")
-    jobs = fetch_jobs()
-    filtered_jobs = filter_jobs(jobs)
-    for job in filtered_jobs:
-        print(f"📋 Job found: {job['title']}")
-        proposal = generate_proposal(job)
-        msg = f"""📌 *New Job Found!*
+def bot_loop():
+    while True:
+        print("🔍 Checking Freelancer jobs...")
+        jobs = fetch_jobs()
+        filtered_jobs = filter_jobs(jobs)
+        for job in filtered_jobs:
+            print(f"📋 Job found: {job['title']}")
+            proposal = generate_proposal(job)
+            encoded_proposal = requests.utils.quote(proposal)
+            msg = f"""📌 *New Job Found!*
 
 *{job['title']}*
 🔗 {job['link']}
 
 📝 *Proposal:*
 {proposal}
-"""
-        send_telegram(msg)
-        print(f"✅ Job '{job['title']}' sent.\n")
 
-# 🔂 Loop every CHECK_INTERVAL
-if __name__ == "__main__":
-    while True:
-        main()
+🔘 [📋 Copy Proposal](https://copy-text.now.sh/?text={encoded_proposal})
+"""
+            send_telegram(msg)
+            print(f"✅ Job '{job['title']}' sent.\n")
         print(f"⏱ Waiting {CHECK_INTERVAL // 60} minutes for next check...\n")
         time.sleep(CHECK_INTERVAL)
+
+# ----------------- WEB APP ------------------
+
+@app.route("/")
+def status():
+    return "✅ Freelancer Auto Proposal Bot is running!"
+
+@app.route("/run")
+def manual_run():
+    threading.Thread(target=bot_loop, daemon=True).start()
+    return "🚀 Bot started manually in background!"
+
+# --------------- RUN FLASK APP --------------
+
+if __name__ == "__main__":
+    threading.Thread(target=bot_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=8000)
